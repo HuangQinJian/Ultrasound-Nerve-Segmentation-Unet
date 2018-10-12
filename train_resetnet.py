@@ -10,8 +10,6 @@ from keras.optimizers import Adam
 from keras.callbacks import ModelCheckpoint, TensorBoard, EarlyStopping, ReduceLROnPlateau
 from keras import backend as K
 
-from data import load_train_data, load_test_data
-
 K.set_image_data_format('channels_last')  # TF dimension ordering in this code
 
 
@@ -21,6 +19,8 @@ img_rows = 96
 img_cols = 96
 
 smooth = 1.
+
+processed_data_path = 'processed/'
 
 
 def dice_coef(y_true, y_pred):
@@ -147,6 +147,7 @@ def get_unet(start_neurons, DropoutRatio=0.5):
 def preprocess(imgs):
     # imgs.shape[0]代表图片数量
     imgs_p = np.ndarray((imgs.shape[0], img_rows, img_cols), dtype=np.uint8)
+    print('所用图片的数量为：', imgs.shape[0])
     """
     skimage.transform.resize(image, output_shape)
     image: 需要改变尺寸的图片
@@ -157,6 +158,18 @@ def preprocess(imgs):
     # np.newaxis在使用和功能上等价于None,其实就是None的一个别名,为numpy.ndarray（多维数组）增加一个轴
     imgs_p = imgs_p[..., np.newaxis]
     return imgs_p
+
+
+def load_train_data():
+    imgs_train = np.load(processed_data_path+'imgs_train_concate.npy')
+    imgs_mask_train = np.load(processed_data_path+'imgs_mask_concate.npy')
+    return imgs_train, imgs_mask_train
+
+
+def load_test_data():
+    imgs_test = np.load(processed_data_path+'imgs_test.npy')
+    imgs_id = np.load(processed_data_path+'imgs_id_test.npy')
+    return imgs_test, imgs_id
 
 
 def train_and_predict():
@@ -181,7 +194,7 @@ def train_and_predict():
     print('-'*30)
     print('Creating and compiling model...')
     print('-'*30)
-    model = get_unet(start_neurons=32, DropoutRatio=0.5)
+    model = get_unet(start_neurons=32)
     model.summary()
     model_checkpoint = ModelCheckpoint(
         'weights.h5', monitor='val_loss', save_best_only=True)
