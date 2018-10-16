@@ -2,12 +2,14 @@ from __future__ import print_function
 
 import numpy as np
 from skimage.transform import resize
-from data import image_cols, image_rows
+from data_generate import image_cols, image_rows
+
+processed_data_path = 'processed/'
 
 
 def prep(img):
     img = img.astype('float32')
-    img = (img > 0.4).astype(np.uint8)  # threshold
+    img = (img > 0.5).astype(np.uint8)  # threshold
     img = resize(img, (image_cols, image_rows), preserve_range=True)
     return img
 
@@ -27,8 +29,13 @@ def run_length_enc(label):
     return ' '.join([str(r) for r in res])
 
 
+def load_test_data():
+    imgs_test = np.load(processed_data_path+'imgs_test.npy')
+    imgs_id = np.load(processed_data_path+'imgs_id_test.npy')
+    return imgs_test, imgs_id
+
+
 def submission():
-    from data import load_test_data
     imgs_test, imgs_id_test = load_test_data()
     imgs_test = np.load('imgs_mask_test.npy')
 
@@ -40,7 +47,7 @@ def submission():
     ids = []
     rles = []
     for i in range(total):
-        img = imgs_test[i,:,:,0]
+        img = imgs_test[i, :, :, 0]
         img = prep(img)
         rle = run_length_enc(img)
 
