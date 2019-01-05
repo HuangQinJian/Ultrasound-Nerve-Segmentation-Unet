@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import os
+import tensorflow as tf
 from skimage.transform import resize
 from skimage.io import imsave
 import numpy as np
@@ -9,16 +10,25 @@ from keras.layers import Input, concatenate, Conv2D, MaxPooling2D, Conv2DTranspo
 from keras.optimizers import Adam
 from keras.callbacks import ModelCheckpoint, TensorBoard, EarlyStopping, ReduceLROnPlateau
 from keras import backend as K
+from keras import initializers
+from keras.utils.vis_utils import plot_model
+import matplotlib.pyplot as plt
 
+plt.switch_backend('agg')
 K.set_image_data_format('channels_last')  # TF dimension ordering in this code
 
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,6,7"
 
 img_rows = 96
 img_cols = 96
 
 smooth = 1.
+gamma = 2.
+alpha = .25
+
+initializer = initializers.RandomUniform(
+    minval=-0.05, maxval=0.05, seed=None)
 
 processed_data_path = 'processed/'
 
@@ -30,76 +40,72 @@ def dice_coef(y_true, y_pred):
     return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
 
 
+def focal_loss(y_true, y_pred):
+    pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
+    pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
+    return -K.sum(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1 + smooth))-K.sum((1-alpha) * K.pow(pt_0, gamma) * K.log(1. - pt_0 + smooth))
+
+
 def dice_coef_loss(y_true, y_pred):
     return -dice_coef(y_true, y_pred)
 
 
 def get_unet():
     inputs = Input((img_rows, img_cols, 1))
-    conv1 = Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
-    conv1 = Conv2D(32, (3, 3), activation='relu', padding='same')(conv1)
+    conv1 = Conv2D(32, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(inputs)
+    conv1 = Conv2D(32, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(conv1)
     pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
-    # pool1 = Dropout(0.25)(pool1)
-    # pool1 = BatchNormalization()(pool1)
 
-    conv2 = Conv2D(64, (3, 3), activation='relu', padding='same')(pool1)
-    conv2 = Conv2D(64, (3, 3), activation='relu', padding='same')(conv2)
+    conv2 = Conv2D(64, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(pool1)
+    conv2 = Conv2D(64, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(conv2)
     pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
-    # pool2 = Dropout(0.5)(pool2)
-    # pool2 = BatchNormalization()(pool2)
 
-    conv3 = Conv2D(128, (3, 3), activation='relu', padding='same')(pool2)
-    conv3 = Conv2D(128, (3, 3), activation='relu', padding='same')(conv3)
+    conv3 = Conv2D(128, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(pool2)
+    conv3 = Conv2D(128, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(conv3)
     pool3 = MaxPooling2D(pool_size=(2, 2))(conv3)
-    # pool3 = Dropout(0.5)(pool3)
-    # pool3 = BatchNormalization()(pool3)
 
-    conv4 = Conv2D(256, (3, 3), activation='relu', padding='same')(pool3)
-    conv4 = Conv2D(256, (3, 3), activation='relu', padding='same')(conv4)
-    pool4 = MaxPooling2D(pool_size=(2, 2))(conv4)
-    # pool4 = Dropout(0.5)(pool4)
-    # pool4 = BatchNormalization()(pool4)
+    conv4 = Conv2D(256, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(pool3)
+    conv4 = Conv2D(256, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(conv4)
 
-    conv5 = Conv2D(512, (3, 3), activation='relu', padding='same')(pool4)
-    conv5 = Conv2D(512, (3, 3), activation='relu', padding='same')(conv5)
+    up5 = concatenate([Conv2DTranspose(256, (2, 2), strides=(
+        2, 2), padding='same')(conv4), conv3], axis=3)
 
-    up6 = concatenate([Conv2DTranspose(256, (2, 2), strides=(
-        2, 2), padding='same')(conv5), conv4], axis=3)
-    # up6 = Dropout(0.5)(up6)
-    # up6 = BatchNormalization()(up6)
-    conv6 = Conv2D(256, (3, 3), activation='relu', padding='same')(up6)
-    conv6 = Conv2D(256, (3, 3), activation='relu', padding='same')(conv6)
+    conv5 = Conv2D(256, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(up5)
+    conv5 = Conv2D(256, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(conv5)
 
-    up7 = concatenate([Conv2DTranspose(128, (2, 2), strides=(
-        2, 2), padding='same')(conv6), conv3], axis=3)
-    # up7 = Dropout(0.5)(up7)
-    # up7 = BatchNormalization()(up7)
-    conv7 = Conv2D(128, (3, 3), activation='relu', padding='same')(up7)
-    conv7 = Conv2D(128, (3, 3), activation='relu', padding='same')(conv7)
+    up6 = concatenate([Conv2DTranspose(128, (2, 2), strides=(
+        2, 2), padding='same')(conv5), conv2], axis=3)
 
-    up8 = concatenate([Conv2DTranspose(64, (2, 2), strides=(
-        2, 2), padding='same')(conv7), conv2], axis=3)
-    # up8 = Dropout(0.5)(up8)
-    # up8 = BatchNormalization()(up8)
-    conv8 = Conv2D(64, (3, 3), activation='relu', padding='same')(up8)
-    conv8 = Conv2D(64, (3, 3), activation='relu', padding='same')(conv8)
+    conv6 = Conv2D(128, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(up6)
+    conv6 = Conv2D(128, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(conv6)
 
-    up9 = concatenate([Conv2DTranspose(32, (2, 2), strides=(
-        2, 2), padding='same')(conv8), conv1], axis=3)
-    # up9 = Dropout(0.5)(up9)
-    # up9 = BatchNormalization()(up9)
-    conv9 = Conv2D(32, (3, 3), activation='relu', padding='same')(up9)
-    conv9 = Conv2D(32, (3, 3), activation='relu', padding='same')(conv9)
+    up7 = concatenate([Conv2DTranspose(64, (2, 2), strides=(
+        2, 2), padding='same')(conv6), conv1], axis=3)
 
-    # conv9 = Dropout(0.5)(conv9)
+    conv7 = Conv2D(64, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(up7)
+    conv7 = Conv2D(64, (3, 3), activation='relu', padding='same',
+                   kernel_initializer=initializer)(conv7)
 
-    conv10 = Conv2D(1, (1, 1), activation='sigmoid')(conv9)
+    conv8 = Conv2D(1, (1, 1), activation='sigmoid')(conv7)
 
-    model = Model(inputs=[inputs], outputs=[conv10])
+    model = Model(inputs=[inputs], outputs=[conv8])
 
     model.compile(optimizer=Adam(lr=1e-5),
                   loss=dice_coef_loss, metrics=[dice_coef])
-
+    plot_model(model, to_file='NetStruct.png', show_shapes=True)
     return model
 
 
@@ -118,15 +124,20 @@ def preprocess(imgs):
     imgs_p = imgs_p[..., np.newaxis]
     return imgs_p
 
+
 def load_train_data():
-    imgs_train = np.load(processed_data_path+'imgs_train_concate.npy')
-    imgs_mask_train = np.load(processed_data_path+'imgs_mask_concate.npy')
+    # imgs_train = np.load(processed_data_path+'imgs_train_concate.npy')
+    # imgs_mask_train = np.load(processed_data_path+'imgs_mask_concate.npy')
+    imgs_train = np.load(processed_data_path+'imgs_train.npy')
+    imgs_mask_train = np.load(processed_data_path+'imgs_mask_train.npy')
     return imgs_train, imgs_mask_train
+
 
 def load_test_data():
     imgs_test = np.load(processed_data_path+'imgs_test.npy')
     imgs_id = np.load(processed_data_path+'imgs_id_test.npy')
     return imgs_test, imgs_id
+
 
 def train_and_predict():
     print('-'*30)
@@ -165,17 +176,33 @@ def train_and_predict():
                               embeddings_layer_names=None,
                               embeddings_metadata=None)
 
-    earlystop = EarlyStopping(monitor='val_loss', patience=5, verbose=0)
+    earlystop = EarlyStopping(monitor='val_loss', patience=2, verbose=0)
 
     reduce_lr = ReduceLROnPlateau(
-        factor=0.1, patience=5, min_lr=0.00001, verbose=1)
+        factor=0.1, patience=2, min_lr=0.00001, verbose=1)
 
     print('-'*30)
     print('Fitting model...')
     print('-'*30)
-    model.fit(imgs_train, imgs_mask_train, batch_size=32, epochs=200, verbose=1, shuffle=True,
-              validation_split=0.2,
-              callbacks=[model_checkpoint, tensorboard, earlystop, reduce_lr])
+    history = model.fit(imgs_train, imgs_mask_train, batch_size=32, epochs=90, verbose=1, shuffle=True,
+                        validation_split=0.2,
+                        callbacks=[model_checkpoint, tensorboard, earlystop, reduce_lr])
+
+    plt.plot(history.history['loss'], label='train')
+    plt.plot(history.history['val_loss'], label='valid')
+    plt.title("model dice_coef_loss")
+    plt.ylabel("dice_coef_loss")
+    plt.xlabel("epoch")
+    plt.legend(["train", "valid"], loc="upper left")
+    plt.savefig('dice_coef_loss_performance.png')
+    plt.clf()
+    plt.plot(history.history['dice_coef'], label='train')
+    plt.plot(history.history['val_dice_coef'], label='valid')
+    plt.title("model dice_coef")
+    plt.ylabel("dice_coef")
+    plt.xlabel("epoch")
+    plt.legend(["train", "valid"], loc="upper left")
+    plt.savefig('dice_coef_performance.png')
 
     print('-'*30)
     print('Loading and preprocessing test data...')
