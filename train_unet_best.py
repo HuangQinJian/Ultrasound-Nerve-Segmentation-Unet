@@ -18,7 +18,7 @@ plt.switch_backend('agg')
 K.set_image_data_format('channels_last')  # TF dimension ordering in this code
 
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,6,7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5,6,7"
 
 img_rows = 96
 img_cols = 96
@@ -103,7 +103,7 @@ def get_unet():
 
     model = Model(inputs=[inputs], outputs=[conv8])
 
-    model.compile(optimizer=Adam(lr=1e-5),
+    model.compile(optimizer=Adam(lr=1e-4),
                   loss=dice_coef_loss, metrics=[dice_coef])
     plot_model(model, to_file='NetStruct.png', show_shapes=True)
     return model
