@@ -1,10 +1,11 @@
 from __future__ import print_function
 
+from keras.preprocessing.image import ImageDataGenerator
 import os
 import tensorflow as tf
-from skimage.transform import resize
-from skimage.io import imsave
 import numpy as np
+from skimage.io import imread
+from skimage.transform import resize
 from keras.models import Model
 from keras.layers import Input, concatenate, Conv2D, MaxPooling2D, Conv2DTranspose, Dropout, BatchNormalization
 from keras.optimizers import Adam
@@ -13,25 +14,27 @@ from keras import backend as K
 from keras import initializers
 from keras.utils.vis_utils import plot_model
 import matplotlib.pyplot as plt
-from keras import initializers
 
 plt.switch_backend('agg')
 K.set_image_data_format('channels_last')  # TF dimension ordering in this code
 
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5,6,7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5"
 
 img_rows = 96
 img_cols = 96
-
 smooth = 1.
-gamma = 2.
-alpha = .25
+batch_size = 32
+
+data_path = 'raw/'
+
+if not os.path.exists(os.path.join(data_path, 'augume_image')):
+    os.makedirs(os.path.join(data_path, 'augume_image'))
+
+if not os.path.exists(os.path.join(data_path, 'augume_mask')):
+    os.makedirs(os.path.join(data_path, 'augume_mask'))
 
 initializer = initializers.RandomUniform(
     minval=-0.05, maxval=0.05, seed=None)
-
-processed_data_path = 'processed/'
 
 
 def dice_coef(y_true, y_pred):
@@ -39,12 +42,6 @@ def dice_coef(y_true, y_pred):
     y_pred_f = K.flatten(y_pred)
     intersection = K.sum(y_true_f * y_pred_f)
     return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
-
-
-def focal_loss(y_true, y_pred):
-    pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
-    pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
-    return -K.sum(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1 + smooth))-K.sum((1-alpha) * K.pow(pt_0, gamma) * K.log(1. - pt_0 + smooth))
 
 
 def dice_coef_loss(y_true, y_pred):
@@ -110,47 +107,84 @@ def get_unet():
     return model
 
 
-def preprocess(imgs):
-    # imgs.shape[0]代表图片数量
-    imgs_p = np.ndarray((imgs.shape[0], img_rows, img_cols), dtype=np.float)
-    print('所用图片的数量为：', imgs.shape[0])
-    for i in range(imgs.shape[0]):
-        imgs_p[i] = imgs[i]
-    # np.newaxis在使用和功能上等价于None,其实就是None的一个别名,为numpy.ndarray（多维数组）增加一个轴
-    imgs_p = imgs_p[..., np.newaxis]
-    return imgs_p
+def train_data_generate_augument():
+    # we create two instances with the same arguments
+    data_gen_args = dict(featurewise_center=False,  # set input mean to 0 over the dataset
+                         samplewise_center=False,  # set each sample mean to 0
+                         featurewise_std_normalization=False,  # divide inputs by std of the dataset
+                         samplewise_std_normalization=False,  # divide each input by its std
+                         zca_whitening=False,  # apply ZCA whitening
+                         # randomly rotate images in the range (degrees, 0 to 180)
+                         rotation_range=180,
+                         # randomly shift images horizontally (fraction of total width)
+                         # width_shift_range=0.05,
+                         # randomly shift images vertically (fraction of total height)
+                         # height_shift_range=0.05,
+                         # fill_mode='constant',
+                         # cval=0.,
+                         horizontal_flip=True,  # randomly flip images
+                         vertical_flip=True  # randomly flip images
+                         )
+    # preprocessing_function=lambda x: (x - x.mean()) / x.std() if x.std() > 0 else x)
+    image_datagen = ImageDataGenerator(**data_gen_args)
+    mask_datagen = ImageDataGenerator(**data_gen_args)
+
+    # Provide the same seed and keyword arguments to the flow methods
+    seed = 1
+
+    image_generator = image_datagen.flow_from_directory(
+        os.path.join(data_path, 'train_image'),
+        # os.path.join(data_path, 'a'),
+        class_mode=None,
+        target_size=(img_rows, img_cols),
+        batch_size=batch_size,
+        color_mode='grayscale',
+        save_to_dir=os.path.join(data_path, 'augume_image'),
+        seed=seed)
+
+    mask_generator = mask_datagen.flow_from_directory(
+        os.path.join(data_path, 'train_mask'),
+        # os.path.join(data_path, 'b'),
+        class_mode=None,
+        target_size=(img_rows, img_cols),
+        batch_size=batch_size,
+        color_mode='grayscale',
+        save_to_dir=os.path.join(data_path, 'augume_mask'),
+        seed=seed)
+
+    # combine generators into one which yields image and masks
+    # train_generator = zip(image_generator, mask_generator)
+    # return train_generator
+    i = 0
+    for batch in image_generator:
+        i += 1
+        if i > 352:
+            break
+        if i == 1:
+            print(batch.shape)
+    i = 0
+    for batch in mask_generator:
+        i += 1
+        if i > 352:
+            break
+        if i == 1:
+            print(batch.shape)
+
+    """新生成的图片数量与i有关,假设文件夹下数目为n,i = (n/batch_size)*想增广的图片数量倍数
+    1）i=2,每张图片变形新生成两张；
+    2）i=1,每张图片变形新生成一张；
+    """
+
+    return image_generator, mask_generator
 
 
-def load_train_data():
-    imgs_train = np.load(processed_data_path+'imgs_train_concate.npy')
-    imgs_mask_train = np.load(processed_data_path+'imgs_mask_concate.npy')
-    return imgs_train, imgs_mask_train
-
-
-def load_test_data():
-    imgs_test = np.load(processed_data_path+'imgs_test.npy')
-    imgs_id = np.load(processed_data_path+'imgs_id_test.npy')
-    return imgs_test, imgs_id
-
-
-def train_and_predict():
+def train_process():
     print('-'*30)
     print('Loading and preprocessing train data...')
+    # train_generator = train_data_generate_augument()
+    image_generator, mask_generator = train_data_generate_augument()
+    train_generator = zip(image_generator, mask_generator)
     print('-'*30)
-    imgs_train, imgs_mask_train = load_train_data()
-
-    imgs_train = preprocess(imgs_train)
-    imgs_mask_train = preprocess(imgs_mask_train)
-
-    imgs_train = imgs_train.astype('float32')
-    mean = np.mean(imgs_train)  # mean for data centering
-    std = np.std(imgs_train)  # std for data normalization
-
-    imgs_train -= mean
-    imgs_train /= std
-
-    imgs_mask_train = imgs_mask_train.astype('float32')
-    imgs_mask_train /= 255.  # scale masks to [0, 1]
 
     print('-'*30)
     print('Creating and compiling model...')
@@ -161,7 +195,7 @@ def train_and_predict():
         'weights.h5', monitor='val_loss', save_best_only=True)
 
     tensorboard = TensorBoard(log_dir='./logs',  # log 目录
-                              histogram_freq=1,  # 按照何等频率（epoch）来计算直方图，0为不计算
+                              histogram_freq=0,  # 按照何等频率（epoch）来计算直方图，0为不计算
                               batch_size=32,     # 用多大量的数据计算直方图
                               write_graph=True,  # 是否存储网络结构图
                               write_grads=False,  # 是否可视化梯度直方图
@@ -178,9 +212,11 @@ def train_and_predict():
     print('-'*30)
     print('Fitting model...')
     print('-'*30)
-    history = model.fit(imgs_train, imgs_mask_train, batch_size=32, epochs=90, verbose=1, shuffle=True,
-                        validation_split=0.2,
-                        callbacks=[model_checkpoint, tensorboard, earlystop, reduce_lr])
+
+    # history = model.fit(
+    #     image_generator, mask_generator, epochs=100, batch_size=batch_size, validation_split=0.2, callbacks=[reduce_lr, earlystop, model_checkpoint, tensorboard], verbose=1)
+    history = model.fit_generator(
+        train_generator, epochs=100, steps_per_epoch=image_generator.n//batch_size, callbacks=[model_checkpoint, tensorboard], verbose=1)
 
     plt.plot(history.history['loss'], label='train')
     plt.plot(history.history['val_loss'], label='valid')
@@ -198,37 +234,7 @@ def train_and_predict():
     plt.legend(["train", "valid"], loc="upper left")
     plt.savefig('dice_coef_performance.png')
 
-    print('-'*30)
-    print('Loading and preprocessing test data...')
-    print('-'*30)
-    imgs_test, imgs_id_test = load_test_data()
-    imgs_test = preprocess(imgs_test)
-
-    imgs_test = imgs_test.astype('float32')
-    imgs_test -= mean
-    imgs_test /= std
-
-    print('-'*30)
-    print('Loading saved weights...')
-    print('-'*30)
-    model.load_weights('weights.h5')
-
-    print('-'*30)
-    print('Predicting masks on test data...')
-    print('-'*30)
-    imgs_mask_test = model.predict(imgs_test, verbose=1)
-    np.save('imgs_mask_test.npy', imgs_mask_test)
-
-    print('-' * 30)
-    print('Saving predicted masks to files...')
-    print('-' * 30)
-    pred_dir = 'preds'
-    if not os.path.exists(pred_dir):
-        os.mkdir(pred_dir)
-    for image, image_id in zip(imgs_mask_test, imgs_id_test):
-        image = (image[:, :, 0] * 255.).astype(np.uint8)
-        imsave(os.path.join(pred_dir, str(image_id) + '_pred.png'), image)
-
 
 if __name__ == '__main__':
-    train_and_predict()
+    # train_process()
+    print(train_data_generate_augument())

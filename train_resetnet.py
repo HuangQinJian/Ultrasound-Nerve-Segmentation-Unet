@@ -12,12 +12,13 @@ from keras.callbacks import ModelCheckpoint, TensorBoard, EarlyStopping, ReduceL
 from keras import backend as K
 from keras.utils.vis_utils import plot_model
 import matplotlib.pyplot as plt
+from keras import initializers
 
 plt.switch_backend('agg')
 K.set_image_data_format('channels_last')  # TF dimension ordering in this code
 
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5,6,7"
 
 img_rows = 96
 img_cols = 96
@@ -25,6 +26,9 @@ img_cols = 96
 smooth = 1.
 gamma = 2.
 alpha = .25
+
+initializer = initializers.RandomUniform(
+    minval=-0.05, maxval=0.05, seed=None)
 
 processed_data_path = 'processed/'
 
@@ -36,14 +40,14 @@ def dice_coef(y_true, y_pred):
     return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
 
 
-def dice_coef_loss(y_true, y_pred):
-    return -dice_coef(y_true, y_pred)
-
-
 def focal_loss(y_true, y_pred):
     pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
     pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
     return -K.sum(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1 + smooth))-K.sum((1-alpha) * K.pow(pt_0, gamma) * K.log(1. - pt_0 + smooth))
+
+
+def dice_coef_loss(y_true, y_pred):
+    return -dice_coef(y_true, y_pred)
 
 
 def BatchActivate(x):
@@ -143,25 +147,18 @@ def get_unet(start_neurons, DropoutRatio=0.5):
 
 def preprocess(imgs):
     # imgs.shape[0]代表图片数量
-    imgs_p = np.ndarray((imgs.shape[0], img_rows, img_cols), dtype=np.uint8)
+    imgs_p = np.ndarray((imgs.shape[0], img_rows, img_cols), dtype=np.float)
     print('所用图片的数量为：', imgs.shape[0])
-    """
-    skimage.transform.resize(image, output_shape)
-    image: 需要改变尺寸的图片
-    output_shape: 新的图片尺寸
-    """
     for i in range(imgs.shape[0]):
-        imgs_p[i] = resize(imgs[i], (img_cols, img_rows), preserve_range=True)
+        imgs_p[i] = imgs[i]
     # np.newaxis在使用和功能上等价于None,其实就是None的一个别名,为numpy.ndarray（多维数组）增加一个轴
     imgs_p = imgs_p[..., np.newaxis]
     return imgs_p
 
 
 def load_train_data():
-    # imgs_train = np.load(processed_data_path+'imgs_train_concate.npy')
-    # imgs_mask_train = np.load(processed_data_path+'imgs_mask_concate.npy')
-    imgs_train = np.load(processed_data_path+'imgs_train.npy')
-    imgs_mask_train = np.load(processed_data_path+'imgs_mask_train.npy')
+    imgs_train = np.load(processed_data_path+'imgs_train_concate.npy')
+    imgs_mask_train = np.load(processed_data_path+'imgs_mask_concate.npy')
     return imgs_train, imgs_mask_train
 
 
@@ -200,7 +197,7 @@ def train_and_predict():
 
     tensorboard = TensorBoard(log_dir='./logs',  # log 目录
                               histogram_freq=1,  # 按照何等频率（epoch）来计算直方图，0为不计算
-                              batch_size=32,     # 用多大量的数据计算直方图
+                              batch_size=128,     # 用多大量的数据计算直方图
                               write_graph=True,  # 是否存储网络结构图
                               write_grads=False,  # 是否可视化梯度直方图
                               write_images=False,  # 是否可视化参数
@@ -208,15 +205,15 @@ def train_and_predict():
                               embeddings_layer_names=None,
                               embeddings_metadata=None)
 
-    earlystop = EarlyStopping(monitor='val_loss', patience=5, verbose=0)
+    earlystop = EarlyStopping(monitor='val_loss', patience=2, verbose=0)
 
     reduce_lr = ReduceLROnPlateau(
-        factor=0.1, patience=5, min_lr=0.00001, verbose=1)
+        factor=0.1, patience=2, min_lr=0.00001, verbose=1)
 
     print('-'*30)
     print('Fitting model...')
     print('-'*30)
-    history = model.fit(imgs_train, imgs_mask_train, batch_size=64, epochs=90, verbose=1, shuffle=True,
+    history = model.fit(imgs_train, imgs_mask_train, batch_size=128, epochs=90, verbose=1, shuffle=True,
                         validation_split=0.2,
                         callbacks=[model_checkpoint, tensorboard, earlystop, reduce_lr])
 
